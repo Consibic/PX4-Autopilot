@@ -13,7 +13,7 @@
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="single_iris_visual"/>
     <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
-    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/single_iris_visual_nested/single_iris_visual_nested.sdf"/>
+    <arg name="sdf" default="$(find px4)/fsc_models/single_iris_visual_nested/single_iris_visual_nested.sdf"/>
 
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>
