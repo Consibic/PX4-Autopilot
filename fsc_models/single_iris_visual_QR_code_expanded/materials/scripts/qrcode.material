@@ -1,0 +1,13 @@
+material PayloadMat/Diffuse
+{
+    technique
+    {
+        pass
+        {
+            texture_unit
+            {
+                texture qr_code_combined.png
+            }
+        }
+    }
+}
