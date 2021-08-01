@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from tf.transformations import euler_from_quaternion
 
 
-bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_zigzag_estimation.bag'
+bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_circular_estimation.bag'
 list_topics = ['/gazebo_ground_truth_payload', '/gazebo_estimate_payload_pose']
 bag = rosbag.Bag(bag_loc)
 
@@ -54,7 +54,7 @@ print(est_tr_list[0])
 print(np.shape(gt_tr_list))
 print(np.shape(est_tr_list))
 
-
+'''
 plt.figure()
 plt.title('Yaw of Zigzag Path')
 plt.plot(gt_rot_list[2], label='ground truth')
@@ -69,12 +69,20 @@ for i, item in enumerate(gt_tr_list[0]):
     tr_diff_list[0].append(est_tr_list[0][i] - item)
     tr_diff_list[1].append(est_tr_list[1][i] - gt_tr_list[1][i])
     tr_diff_list[2].append(est_tr_list[2][i] - gt_tr_list[2][i])
-    rot_diff_list[0].append(est_rot_list[0][i] - gt_rot_list[0][i])
-    rot_diff_list[1].append(est_rot_list[1][i] - gt_rot_list[1][i])
-    rot_diff_list[2].append(est_rot_list[2][i] - gt_rot_list[2][i])
+    if abs(est_rot_list[0][i] - gt_rot_list[0][i]) > abs(est_rot_list[0][i] + gt_rot_list[0][i]):
+        rot_diff_list[0].append(est_rot_list[0][i] + gt_rot_list[0][i])
+    else:
+        rot_diff_list[0].append(est_rot_list[0][i] - gt_rot_list[0][i])
+    if abs(est_rot_list[1][i] - gt_rot_list[1][i]) > abs(est_rot_list[1][i] + gt_rot_list[1][i]):
+        rot_diff_list[1].append(est_rot_list[1][i] + gt_rot_list[1][i])
+    else:
+        rot_diff_list[1].append(est_rot_list[1][i] - gt_rot_list[1][i])
+    if abs(est_rot_list[2][i] - gt_rot_list[2][i]) > abs(est_rot_list[2][i] + gt_rot_list[2][i]):
+        rot_diff_list[2].append(est_rot_list[2][i] + gt_rot_list[2][i])
+    else:
+        rot_diff_list[2].append(est_rot_list[2][i] - gt_rot_list[2][i])
 
 plt.figure()
-plt.title('Yaw Difference of Circular Path')
+plt.title('Yaw Difference of Zigzag Path')
 plt.plot(rot_diff_list[2])
 plt.show()
-'''
