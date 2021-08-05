@@ -12,8 +12,9 @@
 
 4. Write the following lines at the bottom of ~/.bashrc:
 * `source Tools/setup_gazebo.bash $path/PX4-Autopilot $path/PX4-Autopilot/build/px4_sitl_default`
-* `export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$path/PX4-Autopilot`
-* `export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$path/PX4-Autopilot/Tools/sitl_gazebo`
+* `export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:{$path}/PX4-Autopilot`
+* `export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:{$path}/PX4-Autopilot/Tools/sitl_gazebo`
+* `export GAZEBO_MODEL_PATH=$GAZEBO_MODEL_PATH:{$path}/PX4-Autopilot/fsc_models`
 
 5. Run `source ~/.bashrc`.
 
