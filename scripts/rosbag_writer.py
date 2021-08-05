@@ -44,7 +44,7 @@ class ROSBagNode(object):
         # run the rosbag writer at the given frequency
         self.rate = rospy.Rate(self.data_loop_frequency)
         self.time_stamp = 0
-        self.bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_test_estimation.bag'
+        self.bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_zigzag_no_wind.bag'
 	self.bag = rosbag.Bag(self.bag_loc, 'w')
 
     def get_drone_pos(self, msg):

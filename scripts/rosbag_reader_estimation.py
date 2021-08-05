@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from tf.transformations import euler_from_quaternion
 
 
-bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_circular_estimation.bag'
+bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_circular_no_wind.bag'
 list_topics = ['/gazebo_ground_truth_payload', '/gazebo_estimate_payload_pose']
 bag = rosbag.Bag(bag_loc)
 
@@ -50,19 +50,18 @@ for topic, msg, t in bag.read_messages(topics=list_topics):
         est_rot_list[1].append(est_euler[1])
         est_rot_list[2].append(est_euler[2])
 
-print(est_tr_list[0])
+# print(est_tr_list[0])
 print(np.shape(gt_tr_list))
 print(np.shape(est_tr_list))
 
-'''
 plt.figure()
-plt.title('Yaw of Zigzag Path')
-plt.plot(gt_rot_list[2], label='ground truth')
-plt.plot(est_rot_list[2], label='estimation')
+plt.title('x-axis of Zigzag Path')
+plt.plot(gt_tr_list[0], label='ground truth')
+plt.plot(est_tr_list[0], label='estimation')
 plt.legend()
 plt.show()
-'''
 
+'''
 tr_diff_list = [[], [], []]
 rot_diff_list = [[], [], []]
 for i, item in enumerate(gt_tr_list[0]):
@@ -83,6 +82,44 @@ for i, item in enumerate(gt_tr_list[0]):
         rot_diff_list[2].append(est_rot_list[2][i] - gt_rot_list[2][i])
 
 plt.figure()
-plt.title('Yaw Difference of Zigzag Path')
-plt.plot(rot_diff_list[2])
+plt.title('x-axis Difference of Zigzag Path')
+plt.plot(tr_diff_list[0])
 plt.show()
+
+tr_sec = 0.5
+rot_sec = 0.05
+rot_range = [-3, 3]
+tr_range = [-10, 10]
+tr_range_list = list(np.arange(tr_range[0], tr_range[1], tr_sec))
+rot_range_list = list(np.arange(rot_range[0], rot_range[1], rot_sec))
+tr_results = []
+rot_results = []
+
+plt.figure()
+plt.hist(tr_diff_list[1], tr_range_list)
+plt.title('z-axis Difference Distribution of Circular Path')
+plt.show()
+
+for i in range(3):
+    tr_results.append([0] * int((tr_range[1] - tr_range[0]) / tr_sec)) 
+    rot_results.append([0] * int((rot_range[1] - rot_range[0]) / rot_sec)) 
+for i, tr_diff in enumerate(tr_diff_list):
+    for n in tr_diff:
+        index = int(np.floor((n - tr_range[0]) / tr_sec))
+        tr_results[i][index] += 1
+for i, rot_diff in enumerate(rot_diff_list):
+    for n in rot_diff:
+        index = int(np.floor((n - rot_range[0]) / rot_sec))
+        rot_results[i][index] += 1
+print(tr_results)
+print(rot_results)
+for l in tr_diff_list:
+    print(np.mean(l))
+    print(np.std(l))
+    print('-------')
+for l in rot_diff_list:
+    print(np.mean(l))
+    print(np.std(l))
+    print('-------')
+'''
+        
