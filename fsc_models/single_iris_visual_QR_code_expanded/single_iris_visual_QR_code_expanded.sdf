@@ -711,7 +711,7 @@
         <geometry>
           <mesh>
             <scale>0.25 0.25 0.25</scale>
-            <uri>model://single_iris_visual_QR_code_expanded/meshes/all_sides_test.dae</uri>
+            <uri>model://single_iris_visual_QR_code_expanded/meshes/all_sides.dae</uri>
           </mesh>
         </geometry>
         <!--

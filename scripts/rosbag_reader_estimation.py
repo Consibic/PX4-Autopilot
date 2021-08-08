@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from tf.transformations import euler_from_quaternion
 
 
-bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_circular_no_wind.bag'
+bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_zigzag_wind_4_shear_5.bag'
 list_topics = ['/gazebo_ground_truth_payload', '/gazebo_estimate_payload_pose']
 bag = rosbag.Bag(bag_loc)
 
