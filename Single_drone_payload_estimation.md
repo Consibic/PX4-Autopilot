@@ -32,7 +32,7 @@
 * `~/.ros/sitl_iris_1/etc/init.d-posix/airframes`
 * `~/.ros/sitl_iris_2/etc/init.d-posix/airframes`
 
-11. Run `roslaunch px4 single_drone_visual_sitl_QR_code_expanded.launch` for the no-wind case or `roslaunch px4 single_drone_visual_sitl_QR_code_wind.launch` for the case with the wind plugin applied, this launch file will launch mavros and start the rosbag writing process simultaneously.
+11. Run `roslaunch px4 single_iris_visual_QR_code_expanded.launch` for the no-wind case or `roslaunch px4 single_iris_visual_QR_code_wind.launch` for the case with the wind plugin applied, this launch file will launch mavros and start the rosbag writing process simultaneously.
 
 12. Launch QGroundControl, click `Plan` at the upper-left corner, then click `File` -> `Storage` -> `Open` to load the QGroundControl path file (.plan file). Then, click `Upload` at the top of the window. After that, click `Fly` at the upper-left control bar to return to the main page.
 
