@@ -11,9 +11,9 @@
   <arg name="Y" default="0"/>
   <!-- vehicle model and world -->
   <arg name="est" default="ekf2"/>
-  <arg name="vehicle" default="single_iris_visual_QR_code_expanded"/>
-  <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
-  <arg name="sdf" default="$(find px4)/fsc_models/single_iris_visual_QR_code_expanded/single_iris_visual_QR_code_expanded.sdf"/>
+  <arg name="vehicle" default="single_iris_visual_aruco_payload"/>
+  <arg name="world" default="$(find px4)/fsc_worlds/windy.world"/>
+  <arg name="sdf" default="$(find px4)/fsc_models/single_iris_visual_aruco_payload/single_iris_visual_aruco_payload.sdf"/>
   <env name="PX4_SIM_MODEL" value="$(arg vehicle)" />
   <env name="PX4_ESTIMATOR" value="$(arg est)" />
 
@@ -59,4 +59,5 @@
 
   <node name="aruco_estimation" pkg="px4" type="aruco_estimation.py" output="screen" required="True"/>
   <node name="ros_bag" pkg="px4" type="rosbag_writer.py" output="screen" required="True"/>
+
 </launch>
