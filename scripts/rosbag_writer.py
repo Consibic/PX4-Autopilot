@@ -7,6 +7,7 @@ import roslib
 import rospy
 import rosbag
 import numpy as np
+import time
 
 # Import class that computes the desired positions
 from tf.transformations import euler_from_quaternion
@@ -44,7 +45,7 @@ class ROSBagNode(object):
         # run the rosbag writer at the given frequency
         self.rate = rospy.Rate(self.data_loop_frequency)
         self.time_stamp = 0
-        self.bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_zigzag_all_sides.bag'
+        self.bag_loc = '/home/consibic/Documents/rosbag_orig_controller/single_zigzag_all_sides_{0}.bag'.format(str(time.time()))
 	self.bag = rosbag.Bag(self.bag_loc, 'w')
 
     def get_drone_pos(self, msg):
