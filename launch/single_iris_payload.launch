@@ -11,8 +11,10 @@
   <arg name="Y" default="0"/>
   <!-- vehicle model and world -->
   <arg name="est" default="ekf2"/>
+  <arg name="world_name" default="empty"/>
+  <arg name="write_rosbag" default="false"/>
   <arg name="vehicle" default="single_iris_payload"/>
-  <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
+  <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/$(arg world_name).world"/>
   <arg name="sdf" default="$(find px4)/fsc_models/single_iris_payload/single_iris_payload.sdf"/>
   <env name="PX4_SIM_MODEL" value="$(arg vehicle)" />
   <env name="PX4_ESTIMATOR" value="$(arg est)" />
@@ -56,6 +58,7 @@
   </include>
   <!-- gazebo model -->
   <node name="multi_vehicle_spawn" pkg="gazebo_ros" type="spawn_model" output="screen" args="-sdf -file $(arg sdf) -model multi_iris -x $(arg x) -y $(arg y) -z $(arg z) -R $(arg R) -P $(arg P) -Y $(arg Y)"/>
-
-  <node name="ros_bag" pkg="px4" type="rosbag_writer.py" output="screen" required="True"/>
+  <group if="$(eval arg('write_rosbag') == true)">
+      <node name="ros_bag" pkg="px4" type="rosbag_writer.py" output="screen" required="True"/>
+  </group>
 </launch>
