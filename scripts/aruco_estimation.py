@@ -13,17 +13,10 @@ import rospy
 import cv2
 import math
 import os
-import csv
+import copy
 
 # Import the two types of messages we're interested in
 from sensor_msgs.msg import Image    	 # for receiving the video feed
-
-# We need to use resource locking to handle synchronization between GUI thread and ROS topic callbacks
-from threading import Lock
-
-# The GUI libraries
-from PySide import QtCore, QtGui
-# from aer1217_ardrone_simulator.srv import *
 
 # 2017-03-22 Import libraries from OpenCV
 # OpenCV Bridge http://wiki.ros.org/cv_bridge/Tutorials/ConvertingBetweenROSImagesAndOpenCVImagesPython
@@ -34,83 +27,32 @@ from nav_msgs.msg import Odometry
 from tf.transformations import euler_from_quaternion, quaternion_matrix, quaternion_from_euler, euler_from_matrix, euler_matrix
 import numpy as np
 
-# Some Constants
-CONNECTION_CHECK_PERIOD = 250 #ms
-GUI_UPDATE_PERIOD = 20 #ms
-DETECT_RADIUS = 4 # the radius of the circle drawn when a tag is detected
-
-
-class DroneVideoDisplay(QtGui.QMainWindow):
+class DroneVideoDisplay():
+	
 	def __init__(self):
-		# Construct the parent class
-		super(DroneVideoDisplay, self).__init__()
-
-		# Setup our very basic GUI - a label which fills the whole window and holds our image
-		self.setWindowTitle('Video Feed')
-		self.imageBox = QtGui.QLabel(self)
-		self.setCentralWidget(self.imageBox) 
 		
 		# Subscribe to the drone's video feed, calling self.ReceiveImage when a new frame is received
-		self.subVideoBottom = rospy.Subscriber('/iris_0/bottom/image_raw/', Image, self.ReceiveImageBottom,queue_size=1)
-		self.subVideoFront = rospy.Subscriber('/iris_0/front/image_raw/', Image, self.ReceiveImageFront,queue_size=1)
+		self.subVideoBottom   = rospy.Subscriber('/iris_0/bottom/image_raw/', Image, self.ReceiveImageBottom,queue_size=1)
 
-                # subscribe to drone's position and attitude feedback
+                # subscribe to /vicon/ARDroneCarre/ARDroneCarre for position and attitude feedback
                 self.vicon_topic = '/gazebo_ground_truth_UAV0'
                 self._vicon_msg = Odometry()
                 self.sub_vicon = rospy.Subscriber(self.vicon_topic, Odometry, self._vicon_callback)
 
-                # subscribe to individual ArUco marker pose estimations
-                self.marker_topic = '/gazebo_estimate_marker_pose'
-                self._marker_msg = TransformStamped()
-                self.sub_marker_pose = rospy.Subscriber(self.marker_topic, TransformStamped, self._marker_callback)
-
-                # subscribe to individual ArUco marker pose estimations wrt the drone
-                self.marker_topic_camera = '/gazebo_estimate_marker_pose_camera'
-                self._marker_msg_camera = TransformStamped()
-                self.sub_marker_pose_camera = rospy.Subscriber(self.marker_topic_camera, TransformStamped, self._marker_callback_camera)
-
-                # 0 = front camera first, 1 = bottom camera first  
-		self.camera = 1 
+                # subscribe to the averaged payload pose estimations
+                self._payload_pose_msg = TransformStamped()
+                self.sub_payload_pose = rospy.Subscriber('/sensor_msgs/Image/ave_payload_pose', TransformStamped, self._payload_pose_callback)
 		
-		# Holds the image frame received from the drone and later processed by the GUI
-		self.image = None
-		self.imageLock = Lock()
-
-		self.tags = []
-		self.tagLock = Lock()
-				
-		# Holds the status message to be displayed on the next GUI update
-		self.statusMessage = ''
-
-		# Tracks whether we have received data since the last connection check
-		# This works because data comes in at 50Hz but we're checking for a connection at 4Hz
-		self.communicationSinceTimer = False
-		self.connected = False
-
-		# A timer to check whether we're still connected
-		self.connectionTimer = QtCore.QTimer(self)
-		self.connectionTimer.timeout.connect(self.ConnectionCallback)
-		self.connectionTimer.start(CONNECTION_CHECK_PERIOD)
-		
-		# A timer to redraw the GUI
-		self.redrawTimer = QtCore.QTimer(self)
-		self.redrawTimer.timeout.connect(self.RedrawCallback)
-		self.redrawTimer.start(GUI_UPDATE_PERIOD)
-		
-		# 2017-03-22 convert ROS images to OpenCV images
+		# convert ROS images to OpenCV images
 		self.bridge = CvBridge()
 
-		# 2017-03-31 Lab 4 processing images variables
-		self.processImages = True  #false by default		
-		self.cv_output = None
-		self.cv_img = None
-		
-		# rospy.Service('/ardrone/togglecam',ToggleCam,self.ToggleFrontBottomCamera)
+		# set to enable or disable CV image processing
+		self.processImages = True	
 
                 '''********************Project Setup Parameters Below*************************'''
 
-                # use these variables to enable (True) or disable (False) marker identification
-                self.find_markers_enabled = True
+                # enable (True) or disable (False) RANSAC outlier rejection
+                self.RANSAC_enabled = False
 
                 # set up sample counter
                 self.count = 0
@@ -128,8 +70,8 @@ class DroneVideoDisplay(QtGui.QMainWindow):
                 self.dist = np.array([0.0, 0.0, 0.0, 0.0, 0.0]) 
 
                 # declare the rotation and translations between the body (vehicle) and camera frames
-                self.C_cb = np.array([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
-                self.r_bc = np.array([[0.0], [0.0125], [-0.025]])   
+                self.C_cb = np.array([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])  
+                self.r_bc = np.array([[0.0], [0.0175], [-0.03]])  
                 # build transformation matrix from the body to the camera frame
                 self.T_cb = np.zeros((4,4))
                 self.T_cb[0:3,0:3] = self.C_cb 
@@ -152,151 +94,189 @@ class DroneVideoDisplay(QtGui.QMainWindow):
                 self.aruco_size = 0.2 
 
                 # set up transformation matrices from the payload to the marker frames
-                self.T_mp = np.zeros((4,4,4))
+                self.T_mp = np.zeros((24, 4, 4))
                 # marker ID 0 rotation and translation: 
                 self.T_mp[[0],0:4,0:4] = np.eye(4)
-                self.T_mp[[0],0:3,[3]] = np.array([4.5/19., -4.5/19., -0.005]) 
+                self.T_mp[[0],0:3,[3]] = np.array([0.125, -0.125, -0.25]) 
                 # marker ID 1 rotation and translation:
                 self.T_mp[[1],0:4,0:4] = np.eye(4)
-                self.T_mp[[1],0:3,[3]] = np.array([-4.5/19., -4.5/19., -0.005]) 
+                self.T_mp[[1],0:3,[3]] = np.array([-0.125, -0.125, -0.25]) 
                 # marker ID 2 rotation and translation:
                 self.T_mp[[2],0:4,0:4] = np.eye(4)
-                self.T_mp[[2],0:3,[3]] = np.array([4.5/19., 4.5/19., -0.005]) 
+                self.T_mp[[2],0:3,[3]] = np.array([0.125, 0.125, -0.25]) 
                 # marker ID 3 rotation and translation:
                 self.T_mp[[3],0:4,0:4] = np.eye(4)
-                self.T_mp[[3],0:3,[3]] = np.array([-4.5/19., 4.5/19., -0.005])  
+                self.T_mp[[3],0:3,[3]] = np.array([-0.125, 0.125, -0.25])  
+                # marker ID 4 rotation and translation: 
+                self.T_mp[[4],0:4,0:4] = [[0,0,-1,0],[0,1,0,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[4],0:3,[3]] = np.array([0.125, -0.125, -0.25]) 
+                # marker ID 5 rotation and translation:
+                self.T_mp[[5],0:4,0:4] = [[0,0,-1,0],[0,1,0,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[5],0:3,[3]] = np.array([-0.125, -0.125, -0.25]) 
+                # marker ID 6 rotation and translation:
+                self.T_mp[[6],0:4,0:4] = [[0,0,-1,0],[0,1,0,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[6],0:3,[3]] = np.array([0.125, 0.125, -0.25]) 
+                # marker ID 7 rotation and translation:
+                self.T_mp[[7],0:4,0:4] = [[0,0,-1,0],[0,1,0,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[7],0:3,[3]] = np.array([-0.125, 0.125, -0.25])  
+                # marker ID 8 rotation and translation: 
+                self.T_mp[[8],0:4,0:4] = [[-1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,1]]
+                self.T_mp[[8],0:3,[3]] = np.array([0.125, -0.125, -0.25]) 
+                # marker ID 9 rotation and translation:
+                self.T_mp[[9],0:4,0:4] = [[-1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,1]]
+                self.T_mp[[9],0:3,[3]] = np.array([-0.125, -0.125, -0.25]) 
+                # marker ID 10 rotation and translation:
+                self.T_mp[[10],0:4,0:4] = [[-1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,1]]
+                self.T_mp[[10],0:3,[3]] = np.array([0.125, 0.125, -0.25]) 
+                # marker ID 11 rotation and translation:
+                self.T_mp[[11],0:4,0:4] = [[-1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,1]]
+                self.T_mp[[11],0:3,[3]] = np.array([-0.125, 0.125, -0.25])  
+                # marker ID 12 rotation and translation: 
+                self.T_mp[[12],0:4,0:4] = [[0,0,1,0],[0,1,0,0],[-1,0,0,0],[0,0,0,1]]
+                self.T_mp[[12],0:3,[3]] = np.array([0.125, -0.125, -0.25]) 
+                # marker ID 13 rotation and translation:
+                self.T_mp[[13],0:4,0:4] = [[0,0,1,0],[0,1,0,0],[-1,0,0,0],[0,0,0,1]]
+                self.T_mp[[13],0:3,[3]] = np.array([-0.125, -0.125, -0.25]) 
+                # marker ID 14 rotation and translation:
+                self.T_mp[[14],0:4,0:4] = [[0,0,1,0],[0,1,0,0],[-1,0,0,0],[0,0,0,1]]
+                self.T_mp[[14],0:3,[3]] = np.array([0.125, 0.125, -0.25]) 
+                # marker ID 15 rotation and translation:
+                self.T_mp[[15],0:4,0:4] = [[0,0,1,0],[0,1,0,0],[-1,0,0,0],[0,0,0,1]]
+                self.T_mp[[15],0:3,[3]] = np.array([-0.125, 0.125, -0.25])  
+                # marker ID 16 rotation and translation: 
+                self.T_mp[[16],0:4,0:4] = [[0,-1,0,0],[0,0,-1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[16],0:3,[3]] = np.array([0.125, -0.125, -0.25]) 
+                # marker ID 17 rotation and translation:
+                self.T_mp[[17],0:4,0:4] = [[0,-1,0,0],[0,0,-1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[17],0:3,[3]] = np.array([-0.125, -0.125, -0.25]) 
+                # marker ID 18 rotation and translation:
+                self.T_mp[[18],0:4,0:4] = [[0,-1,0,0],[0,0,-1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[18],0:3,[3]] = np.array([0.125, 0.125, -0.25]) 
+                # marker ID 19 rotation and translation:
+                self.T_mp[[19],0:4,0:4] = [[0,-1,0,0],[0,0,-1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[19],0:3,[3]] = np.array([-0.125, 0.125, -0.25])  
+                # marker ID 20 rotation and translation: 
+                self.T_mp[[20],0:4,0:4] = [[0,1,0,0],[0,0,1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[20],0:3,[3]] = np.array([0.125, -0.125, -0.25]) 
+                # marker ID 21 rotation and translation:
+                self.T_mp[[21],0:4,0:4] = [[0,1,0,0],[0,0,1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[21],0:3,[3]] = np.array([-0.125, -0.125, -0.25]) 
+                # marker ID 22 rotation and translation:
+                self.T_mp[[22],0:4,0:4] = [[0,1,0,0],[0,0,1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[22],0:3,[3]] = np.array([0.125, 0.125, -0.25]) 
+                # marker ID 23 rotation and translation:
+                self.T_mp[[23],0:4,0:4] = [[0,1,0,0],[0,0,1,0],[1,0,0,0],[0,0,0,1]]
+                self.T_mp[[23],0:3,[3]] = np.array([-0.125, 0.125, -0.25])  
 
                 # create TransformStamped class to store marker poses for publishing 
                 self._marker_pose = TransformStamped() 
 
                 # set up ROS publisher to publish marker poses in the inertial frame
                 self.pub_marker_pose = rospy.Publisher('/gazebo_estimate_marker_pose', TransformStamped, queue_size = 32)
-
                 # set up ROS publisher to publish marker poses in the camera frame
                 self.pub_marker_pose_camera = rospy.Publisher('/gazebo_estimate_marker_pose_camera', TransformStamped, queue_size = 32)
 
                 # set up ROS publisher to publish payload poses in the inertial frame
                 self.pub_payload_pose = rospy.Publisher('/gazebo_estimate_payload_pose', TransformStamped, queue_size = 32)
-
                 # set up ROS publisher to publish payload poses in the camera frame
                 self.pub_payload_pose_camera = rospy.Publisher('/gazebo_estimate_payload_pose_camera', TransformStamped, queue_size = 32)
+
+                # set up ROS publisher to publish average payload poses in the inertial frame
+                self.pub_ave_payload_pose = rospy.Publisher('/gazebo_estimate_payload_avg_pose', TransformStamped, queue_size = 32)
+
+                # set up ROS publisher to publish payload velocity in the inertial frame
+                self.pub_payload_vel = rospy.Publisher('/gazebo_estimate_payload_vel', TransformStamped, queue_size = 32)
 
                 # sut up publisher to publish ROS images of processed images
                 self.pub_image_processed = rospy.Publisher('/sensor_msgs/Image/processed', Image, queue_size = 1) 
 
                 '''************************ End of Project Setup Parameters *************************'''
-
-	# Called every CONNECTION_CHECK_PERIOD ms, if we haven't received anything since the last callback, will assume we are having network troubles and display a message in the status bar
-	def ConnectionCallback(self):
-		self.connected = self.communicationSinceTimer
-		self.communicationSinceTimer = False
-
-	def RedrawCallback(self):
-		if self.image is not None:
-			# We have some issues with locking between the display thread and the ros messaging thread due to the size of the image, so we need to lock the resources
-			self.imageLock.acquire()
-			try:			
-					# Convert the ROS image into a QImage which we can display
-					if self.processImages == False:
-						image = QtGui.QPixmap.fromImage(QtGui.QImage(self.image.data, self.image.width, self.image.height, QtGui.QImage.Format_RGB888))						
-					# display processed image when processing is enabled
-					else:
-						if self.cv_output is not None:					
-							# convert from openCV output cv_output image back to ROS image (Optional for visualization purposes)
-							img_msg = self.bridge.cv2_to_imgmsg(self.cv_output, encoding="bgr8")
-							# convert to QImage to be displayed
-							image = QtGui.QPixmap.fromImage(QtGui.QImage(img_msg.data, img_msg.width, img_msg.height, QtGui.QImage.Format_RGB888))
-						else:
-							image = QtGui.QPixmap.fromImage(QtGui.QImage(self.image.data, self.image.width, self.image.height, QtGui.QImage.Format_RGB888))		
-
-			finally:
-				self.imageLock.release()
-
-			# We could  do more processing (eg OpenCV) hself.p_aere if we wanted to, but for now lets just display the window.
-			image = image.scaledToWidth(480)
-			self.resize(image.width(),image.height())
-			self.imageBox.setPixmap(image)
-
-		# Update the status bar to show the current drone status & battery level
-		if self.image is None:
-			self.statusBar().showMessage("Simulator not started")
-		else:
-			if self.camera == 0:
-				self.statusBar().showMessage("Displaying front camera")
-			if self.camera == 1:
-				self.statusBar().showMessage("Displaying bottom camera")
 			
         """method to receive the bottom camera images, call the image processing methods and then publish the results if any obstacles or landmarks are detected"""
-	def ReceiveImageBottom(self, data):
-		if self.camera == 1:
-			# Indicate that new data has been received (thus we are connected)
-			self.communicationSinceTimer = True
-			# We have some issues with locking between the GUI update thread and the ROS messaging thread due to the size of the image, so we need to lock the resources
-			self.imageLock.acquire()
-			try:
-                                # backup the vicon pose the moment the image is received 
-                                image_pose = self._vicon_msg
-                                # Save the ros image for processing by the display thread
-                                self.image = data 
+	def ReceiveImageBottom(self,data):
 
-                                # If image processing is enabled and this is a cycle we wish to perform processing on
-                                if self.processImages and (self.count % self.process_freq) == 0:
-                                    try:
-                                        # convert from ROS image to OpenCV image
-                                        cv_image = self.bridge.imgmsg_to_cv2(self.image, desired_encoding="bgr8")
+		try:
+                    # backup the vicon pose the moment the image is received 
+                    image_pose = self._vicon_msg
+                    # Save the ros image for processing by the display thread
+                    self.image = data 
 
-                                        # if ArUco marker finding is enabled
-                                        if self.find_markers_enabled:
-                                            # call method to find the ids, rotation and translation of all markers found in the image in the camera frame
-                                            self.find_markers(cv_image)  
-                                            # if at least 1 ArUco marker was found
-                                            if len(self.ids) > 0:
-                                                # print divider for this image
-                                                # print('---------------------------------------------------------')
-                                                # compute the rotation and transformation matrices from the body to the inertial frame
-                                                self.pose_to_transform_mat(image_pose) 
-                                                # loop through every marker found 
-                                                for i in range(len(self.tvec)):
-                                                    # convert the marker's rotation and translation from the camera frame to the inertial frame
-                                                    self.camera_to_inertial_frame(self.rvec[i], self.tvec[i], self.ids[i]) 
+                    # If image processing is enabled and this is a cycle we wish to perform processing on
+                    if self.processImages and (self.count % self.process_freq) == 0:
+                        try:
+                            # convert from ROS image to OpenCV image
+                            cv_image = self.bridge.imgmsg_to_cv2(self.image, desired_encoding="bgr8")
+
+                           
+                            # call method to find the ids, rotation and translation of all markers found in the image in the camera frame
+                            self.find_markers(cv_image)  
+                            # if at least 1 ArUco marker was found
+                            if len(self.ids) > 0:
+                                # print divider for this image
+                                print('---------------------------------------------------------')
+                                # compute the rotation and transformation matrices from the body to the inertial frame
+                                self.pose_to_transform_mat(image_pose)
+                                # reset array which contains estimated marker positions in the inertial frame (each row is a marker)
+                                # the first 3 columns are (x,y,z) position and the 4th column is marker ID 
+                                self.p_a = np.zeros((0,4)) 
+                                # reset array which contains estimated payload poses in the inertial frame (each row is from a marker)
+                                # the columns are (x,y,z) position, followed by roll, pitch & yaw angles and then the marker ID 
+                                self.T_ip_j = np.zeros((0,7)) 
+                                # loop through every marker found 
+                                for i in range(len(self.tvec)):
+                                    # use the marker's rotation and translation from the camera frame to estimate marker & payload pose in the inertial frame
+                                    self.camera_to_inertial_frame(self.rvec[i], self.tvec[i], self.ids[i]) 
+                                                
+                                # if RANSAC outlier rejection is enabled and at least 3 markers found
+                                # if self.RANSAC_enabled and len(self.ids) >= 3:
+                                    # TODO run RANSAC algorithm
+                                    # print('RANSAC!') 
+
+                                # take the average of the inlier measurements and publish the result
+                                self.average_payload_pose()
    
-                                    except CvBridgeError as e:
-                                        print "Image conversion failed: %s" % e
-				# 2017-03-22 we do not recommend saving images in this function as it might cause huge latency
-			finally:
-				self.imageLock.release()
-                        # increment sample counter for the next loop
-                        self.count += 1
+                        except CvBridgeError as e:
+                           print "Image conversion failed: %s" % e
 
-	def ReceiveImageFront(self,data):
-		if self.camera == 0:
-			# Indicate that new data has been received (thus we are connected)
-			self.communicationSinceTimer = True
-
-			# We have some issues with locking between the GUI update thread and the ROS messaging thread due to the size of the image, so we need to lock the resources
-			self.imageLock.acquire()
-			try:
-				self.image = data # Save the ros image for processing by the display thread
-				# 2017-03-22 we do not recommend saving images in this function as it might cause huge latency
-			finally:
-				self.imageLock.release()
+		finally:
+			pass
+                # increment sample counter for the next loop
+                self.count += 1
 
         # vicon system callback method
         def _vicon_callback(self, msg):
             self._vicon_msg = msg
+
+        # payload pose callback method  
+        def _payload_pose_callback(self, msg):
+            
+            pose_prev = self._payload_pose_msg
+            self._payload_pose_msg = msg
+
+            # compute delta time (dt) in seconds since last sample 
+            dt = (float(self._payload_pose_msg.header.stamp.secs) - float(pose_prev.header.stamp.secs)) + ((float(self._payload_pose_msg.header.stamp.nsecs) - float(pose_prev.header.stamp.nsecs))/10**9)
+            # get position differences between the current and previous time stamp
+            dx = self._payload_pose_msg.transform.translation.x - pose_prev.transform.translation.x
+            dy = self._payload_pose_msg.transform.translation.y - pose_prev.transform.translation.y
+            dz = self._payload_pose_msg.transform.translation.z - pose_prev.transform.translation.z    
+
+            # create message for the payload velocity using the pose message as a template
+            payload_vel_msg = copy.deepcopy(self._payload_pose_msg)
+            # marker linear velocity in meters/sec
+            payload_vel_msg.transform.translation.x = dx/dt
+            payload_vel_msg.transform.translation.y = dy/dt
+            payload_vel_msg.transform.translation.z = dz/dt
+            # marker angular velocity (0's as place holder)
+            payload_vel_msg.transform.rotation.x = 0
+            payload_vel_msg.transform.rotation.y = 0
+            payload_vel_msg.transform.rotation.z = 0
+            payload_vel_msg.transform.rotation.w = 0
+
+            # TODO put the velocities through an exponential moving average filter before publishing 
+
+            # publish the payload velocity's transformStamped message to the ROS topic
+            self.pub_payload_vel.publish(payload_vel_msg) 
          
-        # ArUco marker pose callback method
-        def _marker_callback(self, msg):
-            self._marker_msg = msg
-            # call method to process the marker pose estimations as they are received 
-            self.marker_to_payload_frame(msg, True)
-
-        # ArUco marker pose wrt the drone callback method
-        def _marker_callback_camera(self, msg):
-            self._marker_msg_camera = msg
-            # call method to process the marker pose estimations as they are received 
-            self.marker_to_payload_frame(msg, False)
-
         '''***************************************************************************************************''' 
         '''**********************Project Target Detection Code in the Method Below****************************''' 
         '''***************************************************************************************************'''
@@ -359,155 +339,201 @@ class DroneVideoDisplay(QtGui.QMainWindow):
 
             return
 
-        """method to convert a coordinate frame (a point with a rotation) from the camera frame to the inertial frame"""
+        """method to convert ArUco marker detections (rotation & translation vactors) from the camera frame to the inertial frame"""
         def camera_to_inertial_frame(self, r_vec, t_vec, marker_id):
-              
-            # convert the translation vector to a (4x1) matrix for multiplication with the transformation matrices 
-            r_pc = np.array([[t_vec[0][0]], [t_vec[0][1]], [t_vec[0][2]], [1]]) 
+            
+            # if the marker's ID is within the known range, proceed
+            if marker_id < len(self.T_mp): 
+  
+                """conversion from T_cm to T_im"""
+
+                # initialize the 4x4 transformation matrix from the marker to the camera frame
+                T_cm = np.eye(4)
+                # insert the translation vector from the camera to the marker frame wrt. the camera frame (r_mc) 
+                T_cm[0:3,[3]] = np.array([[t_vec[0][0]], [t_vec[0][1]], [t_vec[0][2]]]) 
+                # convert the rotation vector to a rotation matrix from the marker to the camera frame (C_cm)
+                T_cm[0:3,0:3], _ = cv2.Rodrigues(r_vec[0])   
  
-            # apply transformation matrices to convert the marker location from the camera to the inertial frame
-            r_pi = np.dot(self.T_ib, (np.dot(self.T_bc, r_pc)))    
-            # print the marker location (in the inertial frame) to the terminal for debugging   
-            # print('Marker ' + str(marker_id[0]) + ' Found at: x: ' + str(r_pi[0,0]) + ' y: ' + str(r_pi[1,0]) + ' z: ' + str(r_pi[2,0]))          
+                # compound transformation matrices to convert the marker pose from the camera to the inertial frame
+                T_bm = np.dot(self.T_bc, T_cm)
+                T_im = np.dot(self.T_ib, T_bm)    
+                # extract the payload markers's roll, pitch & yaw from the rotation matrix
+                euler = euler_from_matrix(T_im[0:3,0:3], 'sxyz') 
+
+                # print the marker location (in the inertial frame) to the terminal for debugging   
+                #print('\nMarker ' + str(marker_id[0]) + ' Found at: x: ' + str(T_im[0,3]) + ' y: ' + str(T_im[1,3]) + ' z: ' + str(T_im[2,3]))         
+                # print the marker's attitude (in the inertial frame) to the terminal for debugging 
+                #print('Marker: roll: ' + str(euler[0]) + ' pitch: '  + str(euler[1]) + ' yaw: ' + str(euler[2]))   
  
-            # convert the rotation vector to a rotation matrix from the payload to the camera frame
-            C_cp, _ = cv2.Rodrigues(r_vec[0])   
+                # append the marker position and ID to the backed up list for this image
+                self.p_a = np.vstack((self.p_a, np.array([T_im[0,3], T_im[1,3], T_im[2,3], marker_id])))
 
-            # compound the three rotation matrices to get the conversion from the payload to the inertial frame
-            C_ip = np.dot((self.T_ib[0:3,0:3]), (np.dot(np.transpose(self.C_cb), C_cp))) 
+                # convert the marker's euler angles to quaternions
+                quaternion = quaternion_from_euler(euler[0], euler[1], euler[2], 'sxyz')
 
-            # extract the payload markers's roll, pitch & yaw from the rotation matrix
-            euler = euler_from_matrix(C_ip, 'sxyz')       
-            # print the marker's attitude (in the inertial frame) to the terminal for debugging 
-            # print('Marker: roll: ' + str(euler[0]) + ' pitch: '  + str(euler[1]) + ' yaw: ' + str(euler[2])) 
+                # wrap up all results in a transform stamped message:
+                # time stamp:
+                self._marker_pose.header.stamp.secs = self.time[0]
+                self._marker_pose.header.stamp.nsecs = self.time[1]
+                # image number:   
+                self._marker_pose.header.frame_id = str(self.count)
+                # marker ID:
+                self._marker_pose.child_frame_id = str(marker_id[0])  
+                # marker position in meters
+                self._marker_pose.transform.translation.x = T_im[0,3]
+                self._marker_pose.transform.translation.y = T_im[1,3]
+                self._marker_pose.transform.translation.z = T_im[2,3]
+                # marker attitude in quaternions
+                self._marker_pose.transform.rotation.x = quaternion[0]
+                self._marker_pose.transform.rotation.y = quaternion[1]
+                self._marker_pose.transform.rotation.z = quaternion[2]
+                self._marker_pose.transform.rotation.w = quaternion[3] 
 
-            # convert the marker's euler angles to quaternions
-            quaternion = quaternion_from_euler(euler[0], euler[1], euler[2], 'sxyz')
+                # publish the marker's pose to a ROS topic
+                self.pub_marker_pose.publish(self._marker_pose)  
 
-            # wrap up all results in a transform stamped message:
-            # time stamp:
-            self._marker_pose.header.stamp.secs = self.time[0]
-            self._marker_pose.header.stamp.nsecs = self.time[1]
-            # image number:   
-            self._marker_pose.header.frame_id = str(self.count)
-            # marker ID:
-            self._marker_pose.child_frame_id = str(marker_id[0])  
-            # marker position in meters
-            self._marker_pose.transform.translation.x = r_pi[0,0]
-            self._marker_pose.transform.translation.y = r_pi[1,0]
-            self._marker_pose.transform.translation.z = r_pi[2,0]
-            # marker attitude in quaternions
-            self._marker_pose.transform.rotation.x = quaternion[0]
-            self._marker_pose.transform.rotation.y = quaternion[1]
-            self._marker_pose.transform.rotation.z = quaternion[2]
-            self._marker_pose.transform.rotation.w = quaternion[3]  
-
-            # publish the result to a ROS topic
-            self.pub_marker_pose.publish(self._marker_pose) 
-
-            # compute and publish the pose of marker wrt the camera (drone)
-            marker_pose_camera = TransformStamped()
-            marker_pose_camera.header.stamp.secs = self.time[0]
-            marker_pose_camera.header.stamp.nsecs = self.time[1]
-            # image number:   
-            marker_pose_camera.header.frame_id = str(self.count)
-            # marker ID:
-            marker_pose_camera.child_frame_id = str(marker_id[0])  
-            # marker position in meters
-            marker_pose_camera.transform.translation.x = r_pc[0,0]
-            marker_pose_camera.transform.translation.y = r_pc[1,0]
-            marker_pose_camera.transform.translation.z = r_pc[2,0]
-            # marker attitude in quaternions
-            euler_camera = euler_from_matrix(C_cp, 'sxyz')   
-            quaternion_camera = quaternion_from_euler(euler_camera[0], euler_camera[1], euler_camera[2], 'sxyz')  
-            marker_pose_camera.transform.rotation.x = quaternion_camera[0]
-            marker_pose_camera.transform.rotation.y = quaternion_camera[1]
-            marker_pose_camera.transform.rotation.z = quaternion_camera[2]
-            marker_pose_camera.transform.rotation.w = quaternion_camera[3]  
+                # compute and publish the pose of marker wrt the camera (drone)
+                marker_pose_camera = TransformStamped()
+                marker_pose_camera.header.stamp.secs = self.time[0]
+                marker_pose_camera.header.stamp.nsecs = self.time[1]
+                # image number:   
+                marker_pose_camera.header.frame_id = str(self.count)
+                # marker ID:
+                marker_pose_camera.child_frame_id = str(marker_id[0])  
+                # marker position in meters
+                marker_pose_camera.transform.translation.x = T_bm[0,3]
+                marker_pose_camera.transform.translation.y = T_bm[1,3]
+                marker_pose_camera.transform.translation.z = T_bm[2,3]
+                # marker attitude in quaternions
+                euler_camera = euler_from_matrix(T_bm[0:3, 0:3], 'sxyz')   
+                quaternion_camera = quaternion_from_euler(euler_camera[0], euler_camera[1], euler_camera[2], 'sxyz')  
+                marker_pose_camera.transform.rotation.x = quaternion_camera[0]
+                marker_pose_camera.transform.rotation.y = quaternion_camera[1]
+                marker_pose_camera.transform.rotation.z = quaternion_camera[2]
+                marker_pose_camera.transform.rotation.w = quaternion_camera[3]  
 		
-            self.pub_marker_pose_camera.publish(marker_pose_camera) 
+                self.pub_marker_pose_camera.publish(marker_pose_camera) 
+ 
+                """conversion from T_im to T_ip"""
+                
+                # build the transformation matrix from the payload to the inertial frame
+                T_ip = np.dot(T_im, self.T_mp[marker_id[0]])
+                # extract the payload's roll, pitch & yaw from the rotation matrix
+                euler = euler_from_matrix(T_ip[0:3,0:3], 'sxyz')
+
+                # print the marker location (in the inertial frame) to the terminal for debugging   
+                #print('\nEstimated Payload Pose from Marker ' + str(marker_id[0]))
+                #print('x: ' + str(T_ip[0,3]) + ' y: ' + str(T_ip[1,3]) + ' z: ' + str(T_ip[2,3]))         
+                # print the marker's attitude (in the inertial frame) to the terminal for debugging 
+                #print('roll: ' + str(euler[0]) + ' pitch: '  + str(euler[1]) + ' yaw: ' + str(euler[2])) 
+
+                # append the payload pose estimation and ID to the backed up list for this image
+                self.T_ip_j = np.vstack((self.T_ip_j, np.array([T_ip[0,3], T_ip[1,3], T_ip[2,3], euler[0], euler[1], euler[2], marker_id]))) 
+
+                # convert the payload's euler angles to quaternions
+                quaternion = quaternion_from_euler(euler[0], euler[1], euler[2], 'sxyz')
+
+                # copy the marker pose's transformStamped message to set up the payload pose message
+                payload_pose = copy.deepcopy(self._marker_pose)
+
+                # overwrite the position with the vector from the inertial frame to the payload frame
+                payload_pose.transform.translation.x = T_ip[0,3]
+                payload_pose.transform.translation.y = T_ip[1,3]
+                payload_pose.transform.translation.z = T_ip[2,3]
+                # overwrite the rotation with the quaternion from the inertial frame to the payload frame
+                payload_pose.transform.rotation.x = quaternion[0]
+                payload_pose.transform.rotation.y = quaternion[1]
+                payload_pose.transform.rotation.z = quaternion[2]
+                payload_pose.transform.rotation.w = quaternion[3] 
+
+                # publish the payload pose's transformStamped message to the ROS topic
+                self.pub_payload_pose.publish(payload_pose)  
+
+                # publish payload pose wrt camera
+                # get 3D attitude (in quaternions)
+                x_camera = marker_pose_camera.transform.rotation.x
+                y_camera = marker_pose_camera.transform.rotation.y
+                z_camera = marker_pose_camera.transform.rotation.z
+                w_camera = marker_pose_camera.transform.rotation.w
+
+                # convert quaternions to a transformation matrix from the marker to the payload   
+                T_im_camera = quaternion_matrix([x_camera, y_camera, z_camera, w_camera])
+
+                # extract the translation from the marker to the payload frame and insert to transformation matrix
+                T_im_camera[0,3] = marker_pose_camera.transform.translation.x
+                T_im_camera[1,3] = marker_pose_camera.transform.translation.y
+                T_im_camera[2,3] = marker_pose_camera.transform.translation.z
+
+                # build the transformation matrix from the payload to the inertial frame
+                T_ip_camera = np.dot(T_im_camera, self.T_mp[marker_id[0]])
+
+                # extract the payload's roll, pitch & yaw from the rotation matrix
+                euler_camera = euler_from_matrix(T_ip_camera[0:3,0:3], 'sxyz')
+                # convert the marker's euler angles to quaternions
+                quaternion_camera = quaternion_from_euler(euler_camera[0], euler_camera[1], euler_camera[2], 'sxyz')
+
+                # copy the marker pose's transformStamped message to set up the payload pose message
+                payload_pose_camera = copy.deepcopy(marker_pose_camera)
+
+                # overwrite the position with the vector from the inertial frame to the payload frame
+                payload_pose_camera.transform.translation.x = T_ip_camera[0,3]
+                payload_pose_camera.transform.translation.y = T_ip_camera[1,3]
+                payload_pose_camera.transform.translation.z = T_ip_camera[2,3]
+                # overwrite the rotation with the quaternion from the inertial frame to the payload frame
+                payload_pose_camera.transform.rotation.x = quaternion_camera[0]
+                payload_pose_camera.transform.rotation.y = quaternion_camera[1]
+                payload_pose_camera.transform.rotation.z = quaternion_camera[2]
+                payload_pose_camera.transform.rotation.w = quaternion_camera[3] 
+
+                # publish the payload pose's transformStamped message to the ROS topic
+                self.pub_payload_pose_camera.publish(payload_pose_camera)  
+
+            # else, this marker ID is not defined for the given payload, reject this detection as an outlier 
+            else:
+                print('Marker ID ' + str(marker_id[0]) + ' found, however this marker ID is undefined for this payload.')
 
             return
-
-        '''method to process the individual ArUco marker pose estimations''' 
-        def marker_to_payload_frame(self, marker_pose, wrt_inertial):
-           # wrt_inertial: True: the marker pose is wrt inertial; False: the marker pose is wrt camera (drone)
-       
-           # get the ID of the detected marker 
-           marker_id = int(marker_pose.child_frame_id)
-
-           # if the marker's ID is within the known range
-           if marker_id < len(self.T_mp): 
-
-               # get 3D attitude (in quaternions)
-               x = marker_pose.transform.rotation.x
-               y = marker_pose.transform.rotation.y
-               z = marker_pose.transform.rotation.z
-               w = marker_pose.transform.rotation.w
-
-               # convert quaternions to a transformation matrix from the marker to the payload   
-               T_im = quaternion_matrix([x, y, z, w])
-
-               # extract the translation from the marker to the payload frame and insert to transformation matrix
-               T_im[0,3] = marker_pose.transform.translation.x
-               T_im[1,3] = marker_pose.transform.translation.y
-               T_im[2,3] = marker_pose.transform.translation.z
-
-               # build the transformation matrix from the payload to the inertial frame
-               T_ip = np.dot(T_im, self.T_mp[marker_id])
-
-               # extract the payload's roll, pitch & yaw from the rotation matrix
-               euler = euler_from_matrix(T_ip[0:3,0:3], 'sxyz')
-               # convert the marker's euler angles to quaternions
-               quaternion = quaternion_from_euler(euler[0], euler[1], euler[2], 'sxyz')
-
-               # copy the marker pose's transformStamped message to set up the payload pose message
-               payload_pose = marker_pose
-               # overwrite the position with the vector from the inertial frame to the payload frame
-               payload_pose.transform.translation.x = T_ip[0,3]
-               payload_pose.transform.translation.y = T_ip[1,3]
-               payload_pose.transform.translation.z = T_ip[2,3]
-               # overwrite the rotation with the quaternion from the inertial frame to the payload frame
-               payload_pose.transform.rotation.x = quaternion[0]
-               payload_pose.transform.rotation.y = quaternion[1]
-               payload_pose.transform.rotation.z = quaternion[2]
-               payload_pose.transform.rotation.w = quaternion[3] 
-               
-               # publish the payload pose's transformStamped message to the ROS topic
-               if wrt_inertial:
-                   self.pub_payload_pose.publish(payload_pose) 
-               else:
-                   self.pub_payload_pose_camera.publish(payload_pose) 
-
-           return 
-
 		
+        """method to take the average pose from a set of measurements from the same image then publish the result"""
+        def average_payload_pose(self):
+
+            # copy the marker pose transformStamped message to set up the payload pose message
+            payload_pose = copy.deepcopy(self._marker_pose)
+
+            # overwrite the marker ID with the number of inliers:
+            self._marker_pose.child_frame_id = str(len(self.T_ip_j))  
+            # overwrite the position with the vector from the inertial frame to the payload frame
+            payload_pose.transform.translation.x = np.mean(self.T_ip_j[:,0])
+            payload_pose.transform.translation.y = np.mean(self.T_ip_j[:,1])
+            payload_pose.transform.translation.z = np.mean(self.T_ip_j[:,2])
+           
+            # convert the payload's euler angles to quaternions
+            euler = np.array([np.mean(self.T_ip_j[:,3]), np.mean(self.T_ip_j[:,4]), np.mean(self.T_ip_j[:,5])])
+            quaternion = quaternion_from_euler(euler[0], euler[1], euler[2], 'sxyz')
+
+            # overwrite the rotation with the quaternion from the inertial frame to the payload frame
+            payload_pose.transform.rotation.x = quaternion[0]
+            payload_pose.transform.rotation.y = quaternion[1]
+            payload_pose.transform.rotation.z = quaternion[2]
+            payload_pose.transform.rotation.w = quaternion[3] 
+
+            # publish the average payload pose's transformStamped message to the ROS topic
+            self.pub_ave_payload_pose.publish(payload_pose)  
+
+            # print the average pose to the terminal for debugging
+            # print('Estimated Payload Pose:')
+            # print('X: ' + str(payload_pose.transform.translation.x) + ' Y: ' + str(payload_pose.transform.translation.y) + ' Z: ' + str(payload_pose.transform.translation.z))
+            # print('Roll: ' + str(euler[0]) + ' Pitch: ' + str(euler[1]) + ' Yaw: ' + str(euler[2]))
+
+            return  
+
         '''************************ End of Modification for Project Code *************************'''
-		        
-	# 2017-03-31 Lab 4 code ================================
-	# the codes written here serve as a guideline, it is not required that you use the code. Feel free to modify.
-
-	def EnableImageProcessing(self):  # called from KeyboardController Key_P
-		self.processImages = True
-
-	def DisableImageProcessing(self): # called from KeyboardController Key_P
-		self.processImages = False
-
-	def ToggleFrontBottomCamera(self,req):
-		if (self.camera == 1):
-			self.camera = 0
-			return "Displaying front camera"
-		else:
-			self.camera = 1
-			return "Displaying bottom camera"
-	
 
 if __name__=='__main__':
 	import sys
 	rospy.init_node('aruco_estimation')
-	app = QtGui.QApplication(sys.argv)
 	display = DroneVideoDisplay()
-	display.show() 
-	status = app.exec_()
+
+        rospy.spin()
 	rospy.signal_shutdown('Great Flying!')
 	sys.exit(status)

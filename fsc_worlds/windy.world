@@ -19,9 +19,9 @@
       <windDirectionMean>0 1 0</windDirectionMean>
       <windVelocityMean>4.0</windVelocityMean>
       <windGustDirection>0 0 0</windGustDirection>
-      <windGustDuration>50</windGustDuration>
-      <windGustStart>10</windGustStart>
-      <windGustVelocityMean>5.0</windGustVelocityMean>
+      <windGustDuration>0</windGustDuration>
+      <windGustStart>0</windGustStart>
+      <windGustVelocityMean>0.0</windGustVelocityMean>
       <windPubTopic>world_wind</windPubTopic>
     </plugin>
     <physics name='default_physics' default='0' type='ode'>

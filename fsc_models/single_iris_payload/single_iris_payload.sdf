@@ -121,7 +121,7 @@
         <geometry>
           <mesh>
             <scale>1 1 1</scale>
-            <uri>model://single_iris_visual/meshes/iris_prop_ccw.dae</uri>
+            <uri>model://iris/meshes/iris_prop_ccw.dae</uri>
           </mesh>
         </geometry>
         <material>
@@ -186,7 +186,7 @@
         <geometry>
           <mesh>
             <scale>1 1 1</scale>
-            <uri>model://single_iris_visual/meshes/iris_prop_ccw.dae</uri>
+            <uri>model://iris/meshes/iris_prop_ccw.dae</uri>
           </mesh>
         </geometry>
         <material>
@@ -251,7 +251,7 @@
         <geometry>
           <mesh>
             <scale>1 1 1</scale>
-            <uri>model://single_iris_visual/meshes/iris_prop_cw.dae</uri>
+            <uri>model://iris/meshes/iris_prop_cw.dae</uri>
           </mesh>
         </geometry>
         <material>
@@ -316,7 +316,7 @@
         <geometry>
           <mesh>
             <scale>1 1 1</scale>
-            <uri>model://single_iris_visual/meshes/iris_prop_cw.dae</uri>
+            <uri>model://iris/meshes/iris_prop_cw.dae</uri>
           </mesh>
         </geometry>
         <material>
@@ -675,10 +675,10 @@
       <gaussianNoise>0</gaussianNoise>
       <frameName>/map</frameName>
       <xyzOffsets>0 0 0</xyzOffsets>
-      <rpyOffsets>-1.5708 0 0</rpyOffsets>
+      <rpyOffsets>1.5708 0 0</rpyOffsets>
     </plugin>
     <link name='cable_link'>
-      <pose>0 1 0 1.57 0 0</pose>
+      <pose>0 0.675 0 1.57 0 0</pose>
       <kinematic>0</kinematic>
       <inertial>
         <mass>1e-3</mass>
@@ -727,12 +727,12 @@
     <joint name='cable_to_payload' type='ball'>
       <parent>payload_link</parent>
       <child>cable_link</child>
-      <pose>0 0 -0.9 0 0 0</pose>
+      <pose>0 0 -0.675 0 0 0</pose>
     </joint>
     <joint name='cable_to_iris' type='ball'>
       <parent>base_link</parent>
       <child>cable_link</child>
-      <pose>0 0 0.9 0 0 0</pose>
+      <pose>0 0 0.675 0 0 0</pose>
     </joint>
   </model>
 </sdf>	
